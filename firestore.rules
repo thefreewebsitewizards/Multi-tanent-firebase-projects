@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin(storeId) {
+      return request.auth != null
+        && request.auth.token.storeId == storeId
+        && request.auth.token.role == 'admin';
+    }
+
+    function hasActiveMembership(storeId) {
+      let membership = get(/databases/$(database)/documents/stores/$(storeId)/memberships/$(request.auth.uid));
+      return membership.exists()
+        && (membership.data.accessType == 'lifetime'
+          || (membership.data.accessEnd != null && membership.data.accessEnd > request.time));
+    }
+
+    function canReadStore(storeId) {
+      return request.auth != null
+        && request.auth.token.storeId == storeId
+        && (isAdmin(storeId) || hasActiveMembership(storeId));
+    }
+
+    match /stores/{storeId}/memberships/{memberId} {
+      allow read: if request.auth != null
+        && request.auth.uid == memberId
+        && request.auth.token.storeId == storeId;
+      allow write: if isAdmin(storeId);
+    }
+
+    match /stores/{storeId}/{document=**} {
+      allow read: if canReadStore(storeId);
+      allow write: if isAdmin(storeId);
+    }
+  }
+}

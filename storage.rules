@@ -1,0 +1,28 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAdmin(storeId) {
+      return request.auth != null
+        && request.auth.token.storeId == storeId
+        && request.auth.token.role == 'admin';
+    }
+
+    function hasActiveMembership(storeId) {
+      let membership = firestore.get(/databases/$(database)/documents/stores/$(storeId)/memberships/$(request.auth.uid));
+      return membership.exists()
+        && (membership.data.accessType == 'lifetime'
+          || (membership.data.accessEnd != null && membership.data.accessEnd > request.time));
+    }
+
+    function canReadStore(storeId) {
+      return request.auth != null
+        && request.auth.token.storeId == storeId
+        && (isAdmin(storeId) || hasActiveMembership(storeId));
+    }
+
+    match /stores/{storeId}/uploads/{file} {
+      allow read: if canReadStore(storeId);
+      allow write: if isAdmin(storeId);
+    }
+  }
+}
