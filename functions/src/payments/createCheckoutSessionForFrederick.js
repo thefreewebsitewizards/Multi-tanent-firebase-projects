@@ -6,6 +6,7 @@ const { callShippo } = require("../utils/shippo");
 
 const secretNames = ["STRIPE_SECRET_KEY", "SHIPPO_API_KEY"];
 const PLATFORM_FEE_PERCENT = 7.1;
+const SHIPPING_MARKUP = 1.35;
 const MAX_URL_LENGTH = 2048;
 
 const toCents = (value) => {
@@ -22,6 +23,8 @@ const toCents = (value) => {
     }
     return null;
 };
+
+const toMarkedUpCents = (baseCents) => Math.round(baseCents * SHIPPING_MARKUP);
 
 const clampQuantity = (value) => {
     const parsed = typeof value === "number" ? value : Number(value);
@@ -58,6 +61,64 @@ const normalizeImageUrl = (rawUrl) => {
     } catch {
         return "";
     }
+};
+
+const getShippoApiKeyFromStore = (storeSnap) => {
+    if (!storeSnap) return "";
+    const candidates = [
+        storeSnap.get("shipping.shippoApiKey"),
+        storeSnap.get("shipping.shippo_api_key"),
+        storeSnap.get("shipping.shippoApiToken"),
+        storeSnap.get("shipping.shippo_api_token"),
+        storeSnap.get("shippo.apiKey"),
+        storeSnap.get("shippo.apiToken"),
+        storeSnap.get("shippoApiKey"),
+        storeSnap.get("shippoApiToken"),
+        storeSnap.get("shippoKey")
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate === "string") {
+            const trimmed = candidate.trim();
+            if (trimmed) return trimmed;
+        }
+    }
+    const fallback = process.env.SHIPPO_API_KEY;
+    return typeof fallback === "string" ? fallback.trim() : "";
+};
+
+const callShippoWithApiKey = async ({ method, path, body, apiKey }) => {
+    if (!apiKey) throw new HttpsError("failed-precondition", "Missing Shippo API key.");
+    const url = `https://api.goshippo.com${path}`;
+    const response = await fetch(url, {
+        method,
+        headers: {
+            Authorization: `ShippoToken ${apiKey}`,
+            "Content-Type": "application/json"
+        },
+        body: body ? JSON.stringify(body) : undefined
+    });
+
+    const text = await response.text();
+    let parsed = null;
+    try {
+        parsed = text ? JSON.parse(text) : null;
+    } catch {
+        parsed = null;
+    }
+
+    if (!response.ok) {
+        const message =
+            parsed && typeof parsed === "object" && "detail" in parsed
+                ? String(parsed.detail)
+                : `Shippo request failed with HTTP ${response.status}.`;
+        throw new HttpsError("internal", message, {
+            status: response.status,
+            path,
+            shippo: parsed
+        });
+    }
+
+    return parsed;
 };
 
 exports.createCheckoutSessionForFrederick = functions
@@ -162,6 +223,10 @@ exports.createCheckoutSessionForFrederick = functions
         }));
 
         const normalizedOrderId = typeof orderId === "string" ? orderId.trim() : "";
+        const shippoApiKey = getShippoApiKeyFromStore(storeSnap);
+        let shippingMarginCents = 0;
+        let shippingBaseCents = null;
+        let shippingMarkedUpCents = null;
         let shippingRateId = "";
         if (normalizedOrderId) {
             const orderSnap = await db.collection("stores").doc(validatedStoreId).collection("orders").doc(normalizedOrderId).get();
@@ -171,7 +236,9 @@ exports.createCheckoutSessionForFrederick = functions
         }
 
         if (shippingRateId) {
-            const rate = await callShippo({ method: "GET", path: `/rates/${shippingRateId}/` });
+            const rate = shippoApiKey
+                ? await callShippoWithApiKey({ method: "GET", path: `/rates/${shippingRateId}/`, apiKey: shippoApiKey })
+                : await callShippo({ method: "GET", path: `/rates/${shippingRateId}/` });
             const rateAmountCents = toCents(rate && rate.amount);
             const rateCurrency = rate && rate.currency ? String(rate.currency).toLowerCase() : "";
             if (rateAmountCents === null || rateAmountCents < 0) {
@@ -184,11 +251,14 @@ exports.createCheckoutSessionForFrederick = functions
                 });
             }
             if (rateAmountCents > 0) {
+                shippingBaseCents = rateAmountCents;
+                shippingMarkedUpCents = toMarkedUpCents(rateAmountCents);
+                shippingMarginCents = Math.max(0, shippingMarkedUpCents - rateAmountCents);
                 lineItems.push({
                     quantity: 1,
                     price_data: {
                         currency,
-                        unit_amount: rateAmountCents,
+                        unit_amount: shippingMarkedUpCents,
                         product_data: {
                             name: "Shipping"
                         }
@@ -198,7 +268,8 @@ exports.createCheckoutSessionForFrederick = functions
         }
 
         const subtotalCents = lineItems.reduce((sum, li) => sum + li.price_data.unit_amount * li.quantity, 0);
-        const applicationFeeAmount = Math.max(0, Math.round(subtotalCents * (PLATFORM_FEE_PERCENT / 100)));
+        const platformFeeCents = Math.round(subtotalCents * (PLATFORM_FEE_PERCENT / 100));
+        const applicationFeeAmount = Math.max(0, platformFeeCents + shippingMarginCents);
 
         const userId = context.auth && context.auth.uid ? context.auth.uid : null;
         const userEmail = context.auth && context.auth.token ? context.auth.token.email : null;
@@ -228,6 +299,15 @@ exports.createCheckoutSessionForFrederick = functions
         try {
             const session = await stripe.checkout.sessions.create(sessionPayload, { stripeAccount: stripeAccountId });
             if (normalizedOrderId) {
+                const shippingUpdates =
+                    shippingBaseCents !== null && shippingMarkedUpCents !== null
+                        ? {
+                              "shipping.baseAmountCents": shippingBaseCents,
+                              "shipping.markedUpAmountCents": shippingMarkedUpCents,
+                              "shipping.marginAmountCents": shippingMarginCents,
+                              "shipping.currency": currency.toUpperCase()
+                          }
+                        : {};
                 await db
                     .collection("stores")
                     .doc(validatedStoreId)
@@ -238,6 +318,7 @@ exports.createCheckoutSessionForFrederick = functions
                             stripe: {
                                 checkoutSessionId: session.id
                             },
+                            ...shippingUpdates,
                             updatedAt: admin.firestore.FieldValue.serverTimestamp()
                         },
                         { merge: true }
