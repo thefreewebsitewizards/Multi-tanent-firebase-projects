@@ -7,10 +7,10 @@ const { assignCustomerClaims } = require("./src/staff/assignCustomerClaims");
 const { bootstrapAdminClaims } = require("./src/staff/bootstrapAdminClaims");
 const { createCheckoutSession } = require("./src/payments/createCheckoutSession");
 const { createCheckoutSessionForByrnActive } = require("./src/payments/createCheckoutSessionForByrnActive");
-const { createCheckoutSessionForFrederick } = require("./src/payments/createCheckoutSessionForFrederick");
+const { createCheckoutSessionForFrederick, createCheckoutSessionForLisa } = require("./src/payments/createCheckoutSessionForFrederick");
 const { stripeWebhook } = require("./src/payments/stripeWebhook");
-const { getShippingRatesForFrederick } = require("./src/shipping/getShippingRatesForTenant");
-const { createOrderForFrederick } = require("./src/orders/createOrder");
+const { getShippingRatesForFrederick, getShippingRatesForLisa } = require("./src/shipping/getShippingRatesForTenant");
+const { createOrderForFrederick, createOrderForLisa } = require("./src/orders/createOrder");
 
 // Export functions
 exports.addProduct = addProduct;
@@ -23,9 +23,12 @@ exports.bootstrapAdminClaims = bootstrapAdminClaims;
 exports.createCheckoutSession = createCheckoutSession;
 exports.createCheckoutSessionForByrnActive = createCheckoutSessionForByrnActive;
 exports.createCheckoutSessionForFrederick = createCheckoutSessionForFrederick;
+exports.createCheckoutSessionForLisa = createCheckoutSessionForLisa;
 exports.stripeWebhook = stripeWebhook;
 exports.getShippingRatesForFrederick = getShippingRatesForFrederick;
+exports.getShippingRatesForLisa = getShippingRatesForLisa;
 exports.createOrderForFrederick = createOrderForFrederick;
+exports.createOrderForLisa = createOrderForLisa;
 
 // Example of other potential exports
 // exports.createPaymentIntent = require("./src/payments/createPaymentIntent").createPaymentIntent;

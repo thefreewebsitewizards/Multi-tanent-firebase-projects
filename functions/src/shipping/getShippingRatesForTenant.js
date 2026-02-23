@@ -150,6 +150,31 @@ const defaultShippingConfigForStore = (storeId) => {
             }
         };
     }
+    if (storeId === "lisa_handmade_craft") {
+        return {
+            currency: "USD",
+            enabledCarriers: [],
+            originAddress: {
+                name: "Lisa Rose Batchelor",
+                company: "Rose Creations Crafts",
+                street1: "840 McDonald Road",
+                city: "Covington",
+                state: "GA",
+                zip: "30014",
+                country: "US",
+                phone: "+1 770-527-0449",
+                email: "batchelorlisa0@gmail.com"
+            },
+            defaultParcel: {
+                length: 12,
+                width: 5,
+                height: 9,
+                distance_unit: "in",
+                weight: 1,
+                mass_unit: "lb"
+            }
+        };
+    }
     return null;
 };
 
@@ -458,6 +483,159 @@ exports.getShippingRatesForFrederick = functions
         }
 
         const normalizedFrom = withRequiredPhone(withRequiredCompany(originAddress, "Black Eagle Archery"));
+        const normalizedTo = withRequiredPhone(toAddress);
+
+        const shipment = await callShippoWithApiKey({
+            method: "POST",
+            path: "/shipments/",
+            body: {
+                address_from: normalizedFrom,
+                address_return: normalizedFrom,
+                address_to: normalizedTo,
+                parcels: [parcel],
+                ...(carrierAccountsForRequest ? { carrier_accounts: carrierAccountsForRequest } : {}),
+                async: false
+            },
+            apiKey: shippoApiKey
+        });
+
+        const shipmentId = shipment && shipment.object_id ? String(shipment.object_id) : "";
+        const rates = Array.isArray(shipment && shipment.rates) ? shipment.rates : [];
+        const availableProviders = Array.from(
+            new Set(
+                rates
+                    .map((rate) => (rate && typeof rate === "object" && rate.provider ? String(rate.provider) : ""))
+                    .filter(Boolean)
+            )
+        );
+
+        const filtered = rates
+            .map((rate) => {
+                if (!rate || typeof rate !== "object") return null;
+                const rateId = rate.object_id ? String(rate.object_id) : "";
+                const provider = rate.provider ? String(rate.provider) : "";
+                const serviceName = rate.servicelevel && rate.servicelevel.name ? String(rate.servicelevel.name) : "";
+                const amount = rate.amount ? String(rate.amount) : "";
+                const currency = rate.currency ? String(rate.currency) : "";
+                const estimatedDays =
+                    typeof rate.estimated_days === "number" ? rate.estimated_days : Number(rate.estimated_days);
+                const durationTerms = rate.duration_terms ? String(rate.duration_terms) : "";
+                const carrierKey = normalizeCarrierKey(provider);
+                if (!rateId || !provider || !serviceName || !amount || !currency) return null;
+                if (enabledCarrierKeys.length > 0 && !enabledCarrierKeys.includes(carrierKey)) return null;
+                const baseAmountCents = toCents(amount);
+                const markedUpAmount =
+                    baseAmountCents === null ? "" : (Math.round(baseAmountCents * SHIPPING_MARKUP) / 100).toFixed(2);
+                return {
+                    rateId,
+                    provider,
+                    carrierKey,
+                    serviceName,
+                    amount: markedUpAmount || amount,
+                    baseAmount: amount,
+                    currency: currency.toUpperCase(),
+                    estimatedDays: Number.isFinite(estimatedDays) ? estimatedDays : null,
+                    durationTerms,
+                    isMarkedUp: Boolean(markedUpAmount)
+                };
+            })
+            .filter(Boolean);
+
+        if (!shipmentId) throw new HttpsError("internal", "Shippo shipment did not return an ID.");
+        if (filtered.length === 0) {
+            const enabledCarrierKeys = Array.isArray(enabledCarriersRaw)
+                ? enabledCarriersRaw.map(normalizeCarrierKey).filter(Boolean)
+                : [];
+
+            if (rates.length > 0 && enabledCarrierKeys.length > 0) {
+                const availableCarrierKeys = Array.from(new Set(availableProviders.map(normalizeCarrierKey).filter(Boolean)));
+                throw new HttpsError("failed-precondition", "No shipping rates matched the enabledCarriers for this store.", {
+                    shipmentId,
+                    enabledCarriers: enabledCarriersRaw,
+                    availableProviders,
+                    availableCarrierKeys
+                });
+            }
+
+            const messages = Array.isArray(shipment && shipment.messages) ? shipment.messages : [];
+            const accounts = carrierAccountsSnapshot || (await listCarrierAccounts());
+            const activeCarrierAccounts = toCarrierAccountSummary(accounts);
+            throw new HttpsError("failed-precondition", "No shipping rates available for this address.", {
+                shipmentId,
+                messages,
+                availableProviders,
+                carrierAccountsProvided: carrierAccountsForRequest || [],
+                activeCarrierAccounts
+            });
+        }
+
+        return {
+            shipmentId,
+            rates: filtered
+        };
+    });
+
+exports.getShippingRatesForLisa = functions
+    .runWith({ secrets: secretNames })
+    .https.onCall(async (data) => {
+        const requestedStoreId = typeof data?.storeId === "string" ? data.storeId.trim() : "lisa_handmade_craft";
+        if (requestedStoreId && requestedStoreId !== "lisa_handmade_craft") {
+            throw new HttpsError("permission-denied", "Store not allowed for this function.");
+        }
+
+        const storeId = "lisa_handmade_craft";
+        const toAddress = normalizeAddress(data?.toAddress);
+        if (!toAddress) throw new HttpsError("invalid-argument", "Invalid toAddress.");
+
+        const storeSnap = await db.collection("stores").doc(storeId).get();
+        if (!storeSnap.exists) throw new HttpsError("not-found", "Store not found.");
+
+        const shippoApiKey = getShippoApiKeyFromStore(storeSnap);
+        if (!shippoApiKey) throw new HttpsError("failed-precondition", "Missing Shippo API key.");
+
+        const shippingConfig = await loadShippingConfig(storeId, storeSnap);
+        const originAddress = normalizeAddress(shippingConfig && shippingConfig.originAddress);
+        if (!originAddress) {
+            throw new HttpsError("failed-precondition", "Missing shipping.originAddress for store.", {
+                expectedPaths: [`stores/${storeId}.shipping.originAddress`, `stores/${storeId}/shipping/config.originAddress`]
+            });
+        }
+
+        const enabledCarriersRaw = shippingConfig && shippingConfig.enabledCarriers;
+        const enabledCarrierKeys = Array.isArray(enabledCarriersRaw)
+            ? enabledCarriersRaw.map(normalizeCarrierKey).filter(Boolean)
+            : [];
+
+        const carrierAccountIdsRaw = shippingConfig && (shippingConfig.carrierAccountIds || shippingConfig.carrierAccounts);
+        const carrierAccountIdsFromConfig = Array.isArray(carrierAccountIdsRaw)
+            ? carrierAccountIdsRaw.map((v) => String(v || "").trim()).filter(Boolean)
+            : [];
+
+        const parcel =
+            normalizeParcel(data?.parcel) ||
+            normalizeParcel(shippingConfig && shippingConfig.defaultParcel) ||
+            normalizeParcel(defaultShippingConfigForStore(storeId) && defaultShippingConfigForStore(storeId).defaultParcel);
+        if (!parcel) throw new HttpsError("failed-precondition", "Missing parcel configuration.");
+
+        let carrierAccountsForRequest = carrierAccountIdsFromConfig.length > 0 ? carrierAccountIdsFromConfig : null;
+        let carrierAccountsSnapshot = null;
+        if (!carrierAccountsForRequest && enabledCarrierKeys.length > 0) {
+            const accounts = await listCarrierAccounts();
+            carrierAccountsSnapshot = accounts;
+            const ids = accounts
+                .filter((account) => account && typeof account === "object")
+                .filter((account) => Boolean(account.active))
+                .filter((account) => {
+                    const carrier = normalizeCarrierKey(account.carrier);
+                    const carrierName = normalizeCarrierKey(account.carrier_name);
+                    return enabledCarrierKeys.includes(carrier) || enabledCarrierKeys.includes(carrierName);
+                })
+                .map((account) => (account.object_id ? String(account.object_id) : ""))
+                .filter(Boolean);
+            if (ids.length > 0) carrierAccountsForRequest = ids;
+        }
+
+        const normalizedFrom = withRequiredPhone(withRequiredCompany(originAddress, "Rose Creations Crafts"));
         const normalizedTo = withRequiredPhone(toAddress);
 
         const shipment = await callShippoWithApiKey({

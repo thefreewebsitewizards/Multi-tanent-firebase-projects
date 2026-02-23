@@ -19,13 +19,13 @@ const normalizeOrderItem = (value) => {
     if (!name || !Number.isFinite(price) || price < 0) return null;
     if (!Number.isFinite(quantity) || quantity <= 0) return null;
     return {
-        productId: productId || undefined,
         name,
         price,
         quantity,
-        imageUrl: imageUrl || undefined,
-        option: option || undefined,
-        note: note || undefined
+        ...(productId ? { productId } : {}),
+        ...(imageUrl ? { imageUrl } : {}),
+        ...(option ? { option } : {}),
+        ...(note ? { note } : {})
     };
 };
 
@@ -129,6 +129,53 @@ exports.createOrderForFrederick = functions.https.onCall(async (data, context) =
     const orderData = {
         id: orderRef.id,
         storeId: "frederick",
+        userId: context?.auth?.uid || null,
+        items,
+        customer,
+        shipping: {
+            selectedRateId,
+            shipmentId: shipmentId || null,
+            address: customer
+        },
+        status: "pending",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    await orderRef.set(orderData);
+
+    return {
+        orderId: orderRef.id
+    };
+});
+
+exports.createOrderForLisa = functions.https.onCall(async (data, context) => {
+    const requestedStoreId = normalizeString(data?.storeId);
+    if (requestedStoreId && requestedStoreId !== "lisa_handmade_craft") {
+        throw new HttpsError("permission-denied", "Store not allowed for this function.");
+    }
+
+    const items = Array.isArray(data?.items) ? data.items.map(normalizeOrderItem).filter(Boolean) : [];
+    if (items.length === 0) {
+        throw new HttpsError("invalid-argument", "Order must contain items.");
+    }
+
+    const customer = normalizeAddress(data?.customer);
+    if (!customer) {
+        throw new HttpsError("invalid-argument", "Invalid shipping address.");
+    }
+
+    const shippingRaw = data?.shipping && typeof data.shipping === "object" ? data.shipping : null;
+    const selectedRateId = normalizeString(shippingRaw && shippingRaw.selectedRateId);
+    const shipmentId = normalizeString(shippingRaw && shippingRaw.shipmentId);
+    if (!selectedRateId) {
+        throw new HttpsError("invalid-argument", "Missing selected shipping rate.");
+    }
+
+    const orderRef = db.collection("stores").doc("lisa_handmade_craft").collection("orders").doc();
+    const orderData = {
+        id: orderRef.id,
+        storeId: "lisa_handmade_craft",
         userId: context?.auth?.uid || null,
         items,
         customer,
