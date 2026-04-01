@@ -59,6 +59,7 @@ exports.stripeWebhook = functions
                 const storeId = session.metadata && session.metadata.storeId;
                 const userId = (session.metadata && session.metadata.userId) || session.client_reference_id;
                 const planType = session.metadata && session.metadata.planType;
+                const orderId = session.metadata && session.metadata.orderId;
 
                 if (storeId && userId && planType) {
                     if (session.mode === "subscription" && session.subscription) {
@@ -93,6 +94,27 @@ exports.stripeWebhook = functions
                             stripeSubscriptionId: null
                         });
                     }
+                }
+
+                if (storeId && orderId && session.mode === "payment") {
+                    await db
+                        .collection("stores")
+                        .doc(storeId)
+                        .collection("orders")
+                        .doc(orderId)
+                        .set(
+                            {
+                                status: "paid",
+                                stripe: {
+                                    checkoutSessionId: session.id,
+                                    paymentIntentId: session.payment_intent || null,
+                                    customerId: session.customer || null
+                                },
+                                paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                            },
+                            { merge: true }
+                        );
                 }
             }
 

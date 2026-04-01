@@ -12,6 +12,11 @@ const { stripeWebhook } = require("./src/payments/stripeWebhook");
 const { getShippingRatesForFrederick, getShippingRatesForLisa } = require("./src/shipping/getShippingRatesForTenant");
 const { createOrderForFrederick, createOrderForLisa } = require("./src/orders/createOrder");
 
+// Blog post functions (leigh-blogs tenant)
+const { addPost } = require("./src/posts/addPost");
+const { updatePost } = require("./src/posts/updatePost");
+const { deletePost } = require("./src/posts/deletePost");
+
 // Export functions
 exports.addProduct = addProduct;
 exports.updateProduct = updateProduct;
@@ -30,5 +35,7 @@ exports.getShippingRatesForLisa = getShippingRatesForLisa;
 exports.createOrderForFrederick = createOrderForFrederick;
 exports.createOrderForLisa = createOrderForLisa;
 
-// Example of other potential exports
-// exports.createPaymentIntent = require("./src/payments/createPaymentIntent").createPaymentIntent;
+// Blog post functions
+exports.addPost = addPost;
+exports.updatePost = updatePost;
+exports.deletePost = deletePost;

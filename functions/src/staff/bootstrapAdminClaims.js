@@ -15,11 +15,13 @@ exports.bootstrapAdminClaims = onCall(async (data, context) => {
     if (!storeSnap.exists) {
         throw new HttpsError('not-found', 'Store not found.');
     }
-    const adminEmail = storeSnap.get('adminEmail');
+    const adminEmailRaw = storeSnap.get('adminEmail');
+    const adminEmail = typeof adminEmailRaw === 'string' ? adminEmailRaw.trim().toLowerCase() : '';
     if (!adminEmail) {
         throw new HttpsError('failed-precondition', 'Missing adminEmail for store.');
     }
-    if (context.auth.token.email !== adminEmail) {
+    const requesterEmail = typeof context.auth.token.email === 'string' ? context.auth.token.email.trim().toLowerCase() : '';
+    if (requesterEmail !== adminEmail) {
         throw new HttpsError('permission-denied', 'Not allowed to bootstrap admin claims.');
     }
 
@@ -27,10 +29,6 @@ exports.bootstrapAdminClaims = onCall(async (data, context) => {
         .where('role', '==', 'admin')
         .limit(1)
         .get();
-
-    if (!existingAdmins.empty) {
-        throw new HttpsError('failed-precondition', 'Admin already exists for this store.');
-    }
 
     await auth.setCustomUserClaims(context.auth.uid, {
         storeId,
@@ -42,7 +40,7 @@ exports.bootstrapAdminClaims = onCall(async (data, context) => {
         role: 'admin',
         createdAt: new Date().toISOString(),
         uid: context.auth.uid
-    });
+    }, { merge: true });
 
-    return { success: true };
+    return { success: true, bootstrapped: existingAdmins.empty };
 });

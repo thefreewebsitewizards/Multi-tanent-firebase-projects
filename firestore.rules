@@ -28,6 +28,26 @@ service cloud.firestore {
       allow write: if isAdmin(storeId);
     }
 
+    // Public blog posts — anyone can read published posts
+    match /stores/{storeId}/posts/{postId} {
+      allow read: if true;
+      allow write: if isAdmin(storeId);
+    }
+
+    // Comments — anyone can read, anyone can create (with basic fields)
+    match /stores/{storeId}/comments/{commentId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isAdmin(storeId);
+    }
+
+    // Public products for all stores
+    match /stores/{storeId}/products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin(storeId);
+    }
+
+    // Catch-all for other subcollections (staff, etc.)
     match /stores/{storeId}/{document=**} {
       allow read: if canReadStore(storeId);
       allow write: if isAdmin(storeId);
